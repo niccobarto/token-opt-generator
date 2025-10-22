@@ -50,7 +50,7 @@ class TestTimeOptConfig:
     token_noise: float | None = None
     reg_weight: float | None = None
     reg_type: None | Literal["seed", "zero"] = None
-    reg_type: None | Literal["seed", "zero"] = None
+    num_iter: int = 600
     enable_amp: bool = False
 
 
