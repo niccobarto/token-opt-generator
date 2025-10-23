@@ -8,7 +8,7 @@ from PanelSaver import PanelSaver
 from PromptConfiguration import PromptConfigurator
 from PIL import Image, ImageDraw, ImageFont
 from clip_scorer_simple import ClipScorer
-# --- Scorers (tutti offline). CLIPScore è opzionale ---
+
 try:
     from skimage.metrics import structural_similarity as ssim
     HAS_SKIMAGE = True
@@ -41,7 +41,7 @@ class TestSession:
         self.prompt_cfg = prompt_cfg               # Salvo il configuratore dei prompt
         self.edit_fn = edit_fn                     # Salvo la funzione di editing
         self.panel_saver = PanelSaver()            # Istanzio utility per creare il pannello (originale|edit + prompt)
-        self.scorer = CLIPScorer(clip_model)        # Inizializzo lo scorer CLIP (cosine similarity testo-immagine)
+        self.scorer = ClipScorer(clip_model)        # Inizializzo lo scorer CLIP (cosine similarity testo-immagine)
 
         # I/O
         self.input_dir = Path(cfg.inputs_root) / cfg.split / cfg.object_name            # Directory sorgente immagini (inputs/<split>/<oggetto>)
