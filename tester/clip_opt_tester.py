@@ -1,187 +1,143 @@
-import os,json
-import pandas as pd
-from PIL import Image
-import torch
-import open_clip
-import torch.nn.functional as F
-from sphinx.ext.viewcode import OUTPUT_DIRNAME
-from tqdm import tqdm
-from pathlib import Path# Aggiungo il percorso della cartella `token-opt` al sys.path così è possibile importare i suoi pacchetti (es. `titok`).
-import sys
-import torchvision.transforms as T
-from tto.test_time_opt import TestTimeOpt, TestTimeOptConfig,CLIPObjective
+# testing_core.py
+from __future__ import annotations
+import os, json, math, csv, random
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable, Dict, List, Optional, Tuple, Any
+from PanelSaver import PanelSaver
+from PromptConfiguration import PromptConfigurator
+from PIL import Image, ImageDraw, ImageFont
+import numpy as np
+
+# --- Scorers (tutti offline). CLIPScore è opzionale ---
+try:
+    from skimage.metrics import structural_similarity as ssim
+    HAS_SKIMAGE = True
+except Exception:
+    HAS_SKIMAGE = False
+
+class CLIPScore:
+    """
+    Richiede un 'clip_model' che esponga:
+      encode_text(list[str]) -> np.ndarray [N, D]  (L2-normalizzate)
+      encode_image(PIL.Image) -> np.ndarray [1, D] (L2-normalizzate)
+    Lo score restituito è la cosine similarity in [-1, 1].
+    """
+    name = "clip"
+
+    def __init__(self, clip_model: Any):
+        if clip_model is None:
+            raise ValueError("clip_model is None: fornisci un modello CLIP valido.")
+        self.clip = clip_model
+
+    def score(self, edited: Image.Image, prompt: str) -> float:
+        t = self.clip.encode_text([prompt])[0]   # (D,)
+        v = self.clip.encode_image(edited)[0]    # (D,)
+        # Cosine similarity (assume L2 normalizzate)
+        return float(np.dot(t, v))
 
 
-class ClipOptTester:
+# ============= Config & Session (solo CLIP) =============
+@dataclass
+class TestConfig:
+    inputs_root: Path
+    outputs_root: Path
+    split: str                 # "clean" | "real"
+    object_name: str           # es. "chair"
+    category: str              # "change_material", "change_color", "change_style", "add_component"
+    n_prompts_per_image: int = 3
+    seed: Optional[int] = 0
+    # mapping opzionale [-1,1] -> [0,100] per leggibilità
+    map_clip_to_0_100: bool = False
 
-    def __init__(self):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.clip_model, _, self.clip_preprocess = open_clip.create_model_and_transforms('ViT-B-32', pretrained='openai')
-        self.clip_model = self.clip_model.to(self.device).eval()
-        self.clip_tokenizer = open_clip.get_tokenizer('ViT-B-32')
-        self.tto_config=None
+class TestSession:
+    def __init__(
+        self,
+        cfg: TestConfig,                           # Config di esecuzione (cartelle, split, oggetto, categoria, seed, ecc.)
+        prompt_cfg: PromptConfigurator,            # Generatore dei prompt in base a categoria/oggetto
+        edit_fn: Callable[[Image.Image, str], Image.Image],  # Funzione “adapter” che esegue l’editing (immagine + prompt -> immagine)
+        clip_model: Any                            # Modello CLIP (già caricato) da usare per lo scoring
+    ):
+        self.cfg = cfg                             # Salvo la config
+        self.prompt_cfg = prompt_cfg               # Salvo il configuratore dei prompt
+        self.edit_fn = edit_fn                     # Salvo la funzione di editing
+        self.panel_saver = PanelSaver()            # Istanzio utility per creare il pannello (originale|edit + prompt)
+        self.scorer = CLIPScore(clip_model)        # Inizializzo lo scorer CLIP (cosine similarity testo-immagine)
 
+        # I/O
+        self.input_dir = Path(cfg.inputs_root) / cfg.split / cfg.object_name            # Directory sorgente immagini (inputs/<split>/<oggetto>)
+        self.output_dir = Path(cfg.outputs_root) / cfg.split / cfg.object_name / cfg.category  # Directory di output (outputs/<split>/<oggetto>/<categoria>)
+        self.summary_csv = Path(cfg.outputs_root) / cfg.split / cfg.object_name / f"summary_{cfg.category}.csv"  # CSV riassuntivo per categoria
 
-    def load_rgb_image(self,path:Path):
-        image = Image.open(path).convert("RGB")
-        return image
+    def _list_images(self) -> List[Path]:
+        exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}  # Estensioni supportate
+        if not self.input_dir.exists():                    # Se la cartella non esiste
+            return []                                      # Non ci sono immagini
+        return sorted([p for p in self.input_dir.iterdir() if p.suffix.lower() in exts])  # Lista ordinata dei file immagine
 
-    def clip_score_image_text(self,img:Image.Image,text:str) -> float:
-        with torch.no_grad():
-            image_input=self.clip_preprocess(img).unsqueeze(0).to(self.device)
-            text_input=self.clip_tokenizer([text]).to(self.device)
+    def _write_summary_header(self):
+        self.summary_csv.parent.mkdir(parents=True, exist_ok=True)  # Assicuro che la dir del CSV esista
+        if not self.summary_csv.exists():                           # Se il CSV non c’è ancora
+            with open(self.summary_csv, "w", newline="", encoding="utf-8") as f:  # Lo creo in scrittura
+                writer = csv.writer(f)
+                # Intestazione del CSV (colonne): nota overall=clip e mettiamo anche il seed usato
+                writer.writerow(["image_name", "prompt", "clip", "overall", "panel_path", "seed_used"])
 
-            image_feature=self.clip_model.encode_image(image_input)
-            text_feature=self.clip_model.encode_text(text_input)
+    def _append_summary_row(self, image_name: str, prompt: str, clip_score: float, panel_path: Path, seed_used: int):
+        score = clip_score                                           # Score di base = CLIP cosine similarity in [-1, 1]
+        if self.cfg.map_clip_to_0_100:                               # Se richiesto, rimappo in [0, 100]
+            # mappa [-1,1] -> [0,100] linearmente:  -1 -> 0, 0 -> 50, 1 -> 100
+            score = 50.0 * (clip_score + 1.0)
+        with open(self.summary_csv, "a", newline="", encoding="utf-8") as f:  # Apro il CSV in append
+            writer = csv.writer(f)
+            # Scrivo la riga: image file, prompt, clip (già mappato se attivo), overall (uguale a clip), path pannello, seed locale
+            writer.writerow([image_name, prompt, score, score, str(panel_path), seed_used])
 
-            image_feature=F.normalize(image_feature,dim=-1)
-            text_feature=F.normalize(text_feature,dim=-1)
+    def run(self) -> None:
+        self._write_summary_header()                 # Prepara il CSV (crea header se serve)
+        rng = random.Random(self.cfg.seed)           # RNG deterministico dal seed principale per riproducibilità
 
-            sim=(image_feature@text_feature.T).squeeze().item()
-        return float(sim)
+        images = self._list_images()                 # Colleziono le immagini da processare
+        if not images:                               # Se non ne trovo, warno e finisco
+            print(f"[WARN] Nessuna immagine trovata in: {self.input_dir}")
+            return
 
-    def pil_to_tensor(self,seed_img:Image.Image)->torch.Tensor:
-        _pre_tto=T.Compose([
-            T.Resize(256,interpolation=T.InterpolationMode.BICUBIC),
-            T.CenterCrop(256),
-            T.ToTensor(),
-        ])
+        print(f"[INFO] Found {len(images)} images in {self.input_dir}")  # Log informativo
 
-        x=_pre_tto(seed_img.convert("RGB")) #[3,H,W] in con valori [0,1]
-        x=x.unsqueeze(0).to(self.device,dtype=torch.float32) #[1,3,H,W]
-        return x
-
-    def tensor_to_pil(self,tensor_img:torch.Tensor)->Image.Image:
-        if tensor_img.ndim==4:
-            tensor_img=tensor_img[0]
-        tensor_img=tensor_img.detach().clamp(0,1).cpu()
-        tensor_img=(tensor_img*255).to(torch.uint8)
-        tensor_img=tensor_img.permute(1,2,0).numpy()
-        img=Image.fromarray(tensor_img)
-        return img
-
-    def set_up_tto_config(self,tto_config:TestTimeOptConfig):
-        # Salva la configurazione TTO e, opzionalmente, un objective predefinito
-        self.tto_config=tto_config
-
-    def generate_image(self,seed_img: Image.Image, prompt: str) -> Image.Image:
-        """
-        Esegue Token_Opt su una singola immagine+prompt. Se Token-Opt non è importato correttamente si restituisce l'immagine seed.
-        """
-        if self.tto_config is None:
-            print("Nessuna configurazione TTO impostata, restituisco l'immagine seed")
-            return seed_img
-
-        # PIL -> Tensor [1,3,H,W] in [0,1]
-        seed_tensor = self.pil_to_tensor(seed_img)  # [1,3,256,256]
-
-        # Obiettivo CLIP testuale (argomento corretto: text=)
-        objective = CLIPObjective(prompt=prompt)
-
-        # Usa la configurazione salvata nell'istanza
-        tto = TestTimeOpt(self.tto_config, objective).to(device=self.device)
-        torch.manual_seed(0)
-        tensor_out = tto(seed=seed_tensor)
-
-        return self.tensor_to_pil(tensor_out)
-    def _resolve_image_path(self,csv_path:Path,rel_or_abs:str) -> Path:
-        """
-            Risolve percorsi immagine robustamente:
-            - se è assoluto: lo usa
-            - altrimenti prova relativo alla cartella del CSV
-            - altrimenti prova relativo alla CWD
-         """
-        p = Path(rel_or_abs)
-        if p.is_absolute() and p.exists():
-            return p
-        cand1 = (csv_path.parent / p).resolve()
-        if cand1.exists():
-            return cand1
-        cand2 = (Path.cwd() / p).resolve()
-        if cand2.exists():
-            return cand2
-        return p  # ultimo tentativo (non esiste; useremo check più avanti)
-
-    def test_on_dataset(self, dataset_csv_path: Path, output_dir: Path) -> pd.DataFrame:
-        """
-        Esegue il testing batch:
-        - legge il CSV (id, macrocat, scenario, object, input_image_path, prompt_target)
-        - per ogni riga: salva input, genera output, calcola CLIP score in/out, delta
-        - salva per-test JSON e un CSV aggregato in output_dir
-        - ritorna un DataFrame con i risultati
-        """
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        df = pd.read_csv(dataset_csv_path)
-        required = ["id", "macrocat", "scenario", "object", "input_image_path", "prompt_target"]
-        missing = [c for c in required if c not in df.columns]
-        if missing:
-            raise ValueError(f"Mancano colonne nel CSV: {missing}")
-
-        results = []
-        for _, row in tqdm(df.iterrows(), total=len(df), desc="Testing"):
-            test_id = str(row["id"])
-            macrocat = str(row["macrocat"])
-            scenario = str(row["scenario"])
-            obj = str(row["object"])
-            prompt = str(row["prompt_target"])
-
-            # Risolvi path immagine
-            img_path = self._resolve_image_path(Path(dataset_csv_path), str(row["input_image_path"]))
-            if not img_path.exists():
-                print(f"[WARN] Immagine non trovata per {test_id}: {img_path}")
+        for img_path in images:                      # Loop su ciascun file immagine
+            try:
+                orig = Image.open(img_path).convert("RGB")  # Apro l’immagine e forzo RGB per coerenza
+            except Exception as e:
+                print(f"[SKIP] {img_path.name}: {e}")       # Se fallisce l’apertura, salto con messaggio
                 continue
 
-            # Cartella output per questo test (pulizia selettiva per evitare residui)
-            out_dir = output_dir / macrocat / obj / scenario / test_id
-            if out_dir.exists():
-                # cancella solo la dir del test per evitare confusione tra run
-                for f in out_dir.glob("*"):
-                    try:
-                        f.unlink()
-                    except IsADirectoryError:
-                        import shutil;
-                        shutil.rmtree(f)
-            out_dir.mkdir(parents=True, exist_ok=True)
+            # Seed secondario per questa immagine (deterministico dato cfg.seed): lo salvo anche nel CSV
+            local_seed = rng.randint(0, 10_000)
 
-            # Carica seed e salva
-            seed_img = self.load_rgb_image(img_path)
-            seed_img.save(out_dir / "input.jpg")
+            prompts = self.prompt_cfg.make_prompts(  # Genero i prompt per questa immagine
+                object_name=self.cfg.object_name,    # Oggetto (es. "chair")
+                category=self.cfg.category,          # Categoria (es. "change_material")
+                n=self.cfg.n_prompts_per_image,      # Quanti prompt vuoi per immagine
+                seed=local_seed,                     # Seed locale (così i prompt sono ripetibili per questa immagine)
+            )
 
-            # Calcola CLIP score dell'input (baseline)
-            clip_in = self.clip_score_image_text(seed_img, prompt)
+            for pr in prompts:                       # Loop sui prompt generati
+                # 1) Editing: chiami la tua pipeline (Token-Opt adapter) che produce l’immagine modificata
+                edited = self.edit_fn(orig, pr)
 
-            # Genera output
-            out_img = self.generate_image(seed_img, prompt)
-            out_path = out_dir / "output.png"
-            out_img.save(out_path)
+                # 2) Scoring CLIP: similarità testo (prompt) vs immagine EDITED (cosine in [-1, 1])
+                clip_val = self.scorer.score(edited, pr)
 
-            # CLIP score dell'output e delta
-            clip_out = self.clip_score_image_text(out_img, prompt)
-            delta = clip_out - clip_in
+                # 3) Costruzione del nome file output:
+                #    pr.split()[-1] prende l'ultima parola del prompt come "chiave" rapida per leggibilità
+                key = pr.split()[-1].replace("/", "_")[:20]  # Sanitizza e tronca per sicurezza su FS
+                panel_name = f"{Path(img_path).stem}__{key}.png"  # <nomeInput>__<chiave>.png
+                out_path = self.output_dir / panel_name            # Path completo di output
 
-            # Salva meta JSON
-            meta = {
-                "id": test_id,
-                "macrocat": macrocat,
-                "scenario": scenario,
-                "object": obj,
-                "prompt": prompt,
-                "input_image_path": str(img_path),
-                "output_image_path": str(out_path),
-                "clip_in": float(clip_in),
-                "clip_out": float(clip_out),
-                "delta": float(delta),
-            }
-            with open(out_dir / "clip_scores.json", "w", encoding="utf-8") as f:
-                json.dump(meta, f, ensure_ascii=False, indent=2)
+                # 4) Creo e salvo il pannello affiancato [originale | edited] con prompt in basso
+                self.panel_saver.make_panel(orig, edited, pr, out_path)
 
-            results.append(meta)
+                # 5) Accodo una riga nel CSV con punteggio e metadati
+                self._append_summary_row(Path(img_path).name, pr, clip_val, out_path, local_seed)
 
-        res_df = pd.DataFrame(results)
-        agg_csv = output_dir / "results_clip.csv"
-        res_df.to_csv(agg_csv, index=False)
-        print(f"[DONE] Risultati aggregati salvati in: {agg_csv}")
-
-        return res_df
+        print(f"[DONE] Summary scritto in: {self.summary_csv}")  # Log finale
