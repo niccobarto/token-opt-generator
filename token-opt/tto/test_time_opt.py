@@ -11,7 +11,7 @@ from tto.siglip import SigLIP
 from tto.vqgan_wrapper import PretrainedVQGAN
 
 from typing import cast, Callable, Literal
-
+from dataclasses import dataclass
 import numpy as np
 import torch
 from torch import nn, Tensor
