@@ -7,34 +7,13 @@ from typing import Callable, Dict, List, Optional, Tuple, Any
 from PanelSaver import PanelSaver
 from PromptConfiguration import PromptConfigurator
 from PIL import Image, ImageDraw, ImageFont
-import numpy as np
-
+from clip_scorer_simple import ClipScorer
 # --- Scorers (tutti offline). CLIPScore è opzionale ---
 try:
     from skimage.metrics import structural_similarity as ssim
     HAS_SKIMAGE = True
 except Exception:
     HAS_SKIMAGE = False
-
-class CLIPScore:
-    """
-    Richiede un 'clip_model' che esponga:
-      encode_text(list[str]) -> np.ndarray [N, D]  (L2-normalizzate)
-      encode_image(PIL.Image) -> np.ndarray [1, D] (L2-normalizzate)
-    Lo score restituito è la cosine similarity in [-1, 1].
-    """
-    name = "clip"
-
-    def __init__(self, clip_model: Any):
-        if clip_model is None:
-            raise ValueError("clip_model is None: fornisci un modello CLIP valido.")
-        self.clip = clip_model
-
-    def score(self, edited: Image.Image, prompt: str) -> float:
-        t = self.clip.encode_text([prompt])[0]   # (D,)
-        v = self.clip.encode_image(edited)[0]    # (D,)
-        # Cosine similarity (assume L2 normalizzate)
-        return float(np.dot(t, v))
 
 
 # ============= Config & Session (solo CLIP) =============
@@ -62,7 +41,7 @@ class TestSession:
         self.prompt_cfg = prompt_cfg               # Salvo il configuratore dei prompt
         self.edit_fn = edit_fn                     # Salvo la funzione di editing
         self.panel_saver = PanelSaver()            # Istanzio utility per creare il pannello (originale|edit + prompt)
-        self.scorer = CLIPScore(clip_model)        # Inizializzo lo scorer CLIP (cosine similarity testo-immagine)
+        self.scorer = CLIPScorer(clip_model)        # Inizializzo lo scorer CLIP (cosine similarity testo-immagine)
 
         # I/O
         self.input_dir = Path(cfg.inputs_root) / cfg.split / cfg.object_name            # Directory sorgente immagini (inputs/<split>/<oggetto>)
