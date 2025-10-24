@@ -54,9 +54,7 @@ class PromptConfigurator:
         category: one of {"change_material", "change_color", "change_style", "add_component"}
         strength: opzionale ("subtle" | "moderate" | "strong") che modula testo
         """
-        if object_name not in self.objects:
-            raise ValueError(f"Unknown object: {object_name}")
-
+        
         for cat in self.categoryes:
             if category not in self.categoryes:
                 raise ValueError(f"Unknown category: {category}")
