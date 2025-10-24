@@ -47,8 +47,9 @@ class PromptConfigurator:
         object_name: str,
         category: str,
         n: int,
-        seed: Optional[int] = None,
-        is_clean: bool = False
+        is_clean: bool = False,
+        seed: Optional[int] = None
+        
     ) -> List[str]:
         """
         category: one of {"change_material", "change_color", "change_style", "add_component"}
