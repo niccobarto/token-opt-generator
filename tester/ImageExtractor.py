@@ -2,7 +2,6 @@ import os
 from pathlib import Path
 from typing import List
 from PIL import Image
-from ImageSaver import create_side_by_side_with_caption
 
 #Devo restituire una lista di oggetti del tipo ("oggetto", list immagini clean, list immagini real)
 class Extractor:
