@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Any
 from ImageSaver import PanelSaver
-from PromptConfiguration import PromptConfigurator
+from PromptConfigurator import PromptConfigurator
 from PIL import Image, ImageDraw, ImageFont
 from clip_scorer_simple import ClipScorer
 
