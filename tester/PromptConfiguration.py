@@ -3,16 +3,20 @@ from pathlib import Path
 from typing import List, Dict, Optional
 import random
 
+
+
 @dataclass
 class PromptConfigurator:
     """
     Genera prompt in base alla categoria di editing, mantenendo sempre l'oggetto.
     Le 'intensità' e i 'pool' sono personalizzabili.
     """
+    categoryes: List[str] = field(default_factory=lambda: ["change_material", "change_color", "change_style", "add_component"])
+
     # Pools per categorie
     materials: List[str] = field(default_factory=lambda: [
-        "polished steel", "brushed aluminum", "matte black metal", "transparent acrylic",
-        "solid oak wood", "walnut wood", "marble stone", "ceramic", "carbon fiber"
+        "polished steel", "brushed aluminum", "black metal", "transparent acrylic",
+        "oak wood", "wood", "marble stone", "ceramic", "carbon fiber"
     ])
     colors: List[str] = field(default_factory=lambda: [
         "white", "black", "blue", "green", "red",
@@ -27,44 +31,53 @@ class PromptConfigurator:
         "with a frosted glass cover", "with a chrome footrest", "with a cable management clip"
     ])
 
-    # Contesto descrittivo fisso per “qualità” (puoi variarlo)
-    suffix: str = "without changing background, high detail, photorealistic"
+
+    real_suffix: str = "without changing background, high detail, photorealistic"
+    white_background_suffix: str = "on a white background, high detail, photorealistic"
 
     #Sceglie (in base al seed) n elementi dal pool di cambiamenti disponibili per la categoria selezionata
     def _pick(self, pool: List[str], n: int, seed: Optional[int]) -> List[str]:
         rng = random.Random(seed)
         return [rng.choice(pool) for _ in range(n)]
 
+    def _suffix(self, is_clean: bool = False) -> str:
+        return self.real_suffix if not is_clean else self.white_background_suffix
     def make_prompts(
         self,
         object_name: str,
         category: str,
         n: int,
         seed: Optional[int] = None,
+        is_clean: bool = False
     ) -> List[str]:
         """
         category: one of {"change_material", "change_color", "change_style", "add_component"}
         strength: opzionale ("subtle" | "moderate" | "strong") che modula testo
         """
+        if object_name not in self.objects:
+            raise ValueError(f"Unknown object: {object_name}")
+
+        for cat in self.categoryes:
+            if category not in self.categoryes:
+                raise ValueError(f"Unknown category: {category}")
 
         if category == "change_material":
             choices = self._pick(self.materials, n, seed)
-            return [f"a photo of a {object_name} made of {c} {self.suffix}".strip() for c in choices]
+            return [f"a photo of a {object_name} made of {c} {self._suffix(is_clean)}".strip() for c in choices]
 
         if category == "change_color":
             choices = self._pick(self.colors, n, seed)
-            return [f"a photo of a {object_name} in {c} color {self.suffix}".strip() for c in choices]
+            return [f"a photo of a {object_name} in {c} color {self._suffix(is_clean)}".strip() for c in choices]
 
         if category == "change_style":
             choices = self._pick(self.styles, n, seed)
-            return [f"a photo of a {object_name} in {c} style {self.suffix}".strip() for c in choices]
+            return [f"a photo of a {object_name} in {c} style {self._suffix(is_clean)}".strip() for c in choices]
 
         if category == "add_component":
             choices = self._pick(self.add_components, n, seed)
-            return [f"a photo of a {object_name} {c} {self.suffix}".strip() for c in choices]
+            return [f"a photo of a {object_name} {c} {self._suffix(is_clean)}".strip() for c in choices]
 
         raise ValueError(f"Unknown category: {category}")
 
-
-promptConfig = PromptConfigurator()
-print(promptConfig.make_prompts("cup","add_component", 3, seed=1))
+    def get_categories(self) -> List[str]:
+        return self.categoryes
