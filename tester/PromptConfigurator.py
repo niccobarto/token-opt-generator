@@ -16,7 +16,7 @@ class PromptConfigurator:
     # Pools per categorie
     materials: List[str] = field(default_factory=lambda: [
         "polished steel", "brushed aluminum", "black metal", "transparent acrylic",
-        "oak wood", "wood", "marble stone", "ceramic", "carbon fiber"
+        "wood", "marble stone", "ceramic", "carbon fiber", "leather"
     ])
     colors: List[str] = field(default_factory=lambda: [
         "white", "black", "blue", "green", "red",
@@ -24,16 +24,17 @@ class PromptConfigurator:
     ])
     styles: List[str] = field(default_factory=lambda: [
         "minimalist", "industrial", "futuristic", "baroque",
-        "mid-century modern", "Japanese wabi-sabi", "Art Deco"
+        "mid-century modern", "Japanese wabi-sabi", "Art Deco", "steampunk",
+        "Sci-fi", "vintage", "rustic",
     ])
+
     add_components: List[str] = field(default_factory=lambda: [
         "with brass handles", "with a small side shelf", "with a leather cushion",
-        "with a frosted glass cover", "with a chrome footrest", "with a cable management clip"
+        "with a frosted glass cover", "with a chrome footrest", "with wheels", "with legs"
     ])
 
-
-    real_suffix: str = "without changing background, high detail, photorealistic"
-    white_background_suffix: str = "on a white background, high detail, photorealistic"
+    real_suffix: str = "without changing background, high detail"
+    white_background_suffix: str = "on a white background, high detail"
 
     #Sceglie (in base al seed) n elementi dal pool di cambiamenti disponibili per la categoria selezionata
     def _pick(self, pool: List[str], n: int, seed: Optional[int]) -> List[str]:
