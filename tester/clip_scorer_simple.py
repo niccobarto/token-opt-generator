@@ -43,7 +43,7 @@ class ClipScorer:
         CLIPScore(I, C) = max(100 * cos(E_I, E_C), 0)
         """
         img_feat = self._encode_images([image])
-        txt_feat = self._encode_text([text])
+        txt_eat = self._encode_text([text])
         cos = (img_feat @ txt_feat.T).squeeze().item()
         return max(100.0 * cos, 0.0)
 
