@@ -15,7 +15,7 @@ class PromptConfigurator:
 
     # Pools per categorie
     materials: List[str] = field(default_factory=lambda: [
-        "polished steel", "brushed aluminum", "black metal", "transparent acrylic",
+        "polished steel", "brushed aluminum", "metal", "glass",
         "wood", "marble stone", "ceramic", "carbon fiber", "leather"
     ])
     colors: List[str] = field(default_factory=lambda: [
@@ -24,7 +24,7 @@ class PromptConfigurator:
     ])
     styles: List[str] = field(default_factory=lambda: [
         "minimalist", "industrial", "futuristic", "baroque",
-        "mid-century modern", "Japanese wabi-sabi", "Art Deco", "steampunk",
+        "mid-century modern", "cyberpunk", "Art Deco", "steampunk",
         "Sci-fi", "vintage", "rustic",
     ])
 
@@ -35,14 +35,19 @@ class PromptConfigurator:
 
     real_suffix: str = "without changing background, high detail"
     white_background_suffix: str = "on a white background, high detail"
-
+    
+    enable_suffix: bool=True
     #Sceglie (in base al seed) n elementi dal pool di cambiamenti disponibili per la categoria selezionata
     def _pick(self, pool: List[str], n: int, seed: Optional[int]) -> List[str]:
         rng = random.Random(seed)
         return [rng.choice(pool) for _ in range(n)]
 
     def _suffix(self, is_clean: bool = False) -> str:
-        return self.real_suffix if not is_clean else self.white_background_suffix
+        if enable_suffix:
+            return self.real_suffix if not is_clean else self.white_background_suffix
+        else:
+            return ""
+            
     def make_prompts(
         self,
         object_name: str,
@@ -67,7 +72,7 @@ class PromptConfigurator:
 
         if category == "change_color":
             choices = self._pick(self.colors, n, seed)
-            return [f"a photo of a {object_name} in {c} color {self._suffix(is_clean)}".strip() for c in choices]
+            return [f"a photo of a {c} {object_name} {self._suffix(is_clean)}".strip() for c in choices]
 
         if category == "change_style":
             choices = self._pick(self.styles, n, seed)
