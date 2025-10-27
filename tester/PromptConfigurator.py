@@ -43,7 +43,7 @@ class PromptConfigurator:
         return [rng.choice(pool) for _ in range(n)]
 
     def _suffix(self, is_clean: bool = False) -> str:
-        if enable_suffix:
+        if self.enable_suffix:
             return self.real_suffix if not is_clean else self.white_background_suffix
         else:
             return ""
